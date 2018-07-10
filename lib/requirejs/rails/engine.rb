@@ -36,7 +36,12 @@ module Requirejs
           end
         end
 
-        manifest_directory = config.assets.manifest || File.join(::Rails.public_path, config.assets.prefix)
+        manifest_directory = if config.assets.manifest
+          File.basename(config.assets.manifest) =~ /\./ ? File.dirname(config.assets.manifest) : config.assets.manifest
+        else
+          File.join(::Rails.public_path, config.assets.prefix)
+        end
+
         manifest_path = File.join(manifest_directory, "rjs_manifest.yml")
         config.requirejs.manifest_path = Pathname.new(manifest_path)
       end
@@ -50,12 +55,28 @@ module Requirejs
         end
       end
 
+      # Are we running in the precompilation Rake task? If so, we need to adjust certain environmental configuration
+      # values.
+      if defined?(Rake) && Rake.application.top_level_tasks.include?("requirejs:precompile:all")
+        initializer "requirejs.modify_environment_config", after: "load_environment_config", group: :all do |app|
+          app.configure do
+            # If we don't set this to true, sprockets-rails will assign `Rails.application.assets` to `nil`.
+            config.assets.compile = true
+
+            # Don't compress JavaScripts fed into the r.js optimizer.
+            config.assets.js_compressor = false
+
+            # Don't use any cache to retrieve assets.
+            config.assets.cache = nil
+          end
+        end
+      end
+
       if ::Rails::VERSION::MAJOR >= 4
         config.after_initialize do |app|
           config = app.config
-          rails_manifest_path = File.join(app.root, 'public', config.assets.prefix)
-          rails_manifest = Sprockets::Manifest.new(app.assets, rails_manifest_path)
-          if config.requirejs.manifest_path.exist? && rails_manifest
+          if config.requirejs.manifest_path.exist?
+            rails_manifest = ::Sprockets::Railtie.build_manifest(app)
             rjs_digests = YAML.load(ERB.new(File.new(config.requirejs.manifest_path).read).result)
             rails_manifest.assets.merge!(rjs_digests)
             ActionView::Base.instance_eval do
